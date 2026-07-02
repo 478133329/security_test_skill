@@ -11,25 +11,53 @@
 
 | 属性 | 说明 |
 |------|------|
-| **物理连接** | 一般是个人电脑，通过物理串口线与 A2 相连 |
-| **核心程序** | 需要运行桥接程序（UART-to-SSH Bridge） |
-| **SSH 转发** | 将 A2 的串口数据以 SSH 服务形式转发，端口 `2222` |
-| **账号** | `admin@172.25.87.179` |
+| **物理连接** | 一般是 Windows 个人电脑，通过两根物理串口线分别连接 A2 的 SoC 和 MCU |
+| **核心程序** | 需要运行两个桥接进程，每个串口一个 |
+| **账号** | `admin@172.25.84.190` |
 | **密码** | `123456` |
 
-**重要**: 跳板机的IP(172.25.87.179)为示例，需要先向用户确认跳板机IP
+**重要**: 跳板机的IP(172.25.84.190)为示例，需要先向用户确认跳板机IP
+
+### 双串口架构
+
+A2 开发板上有两颗芯片：**SoC**（运行 bmtest）和 **MCU**（可控制 SoC 复位）。两者各有一条 UART 连接到跳板机。
+
+| SSH 端口 | 跳板机串口 | 连接目标 | 用途 |
+|----------|-----------|----------|------|
+| 2222 | `COM1` | A2 **SoC** 串口 | bmtest CLI，安全测试命令交互 |
+| 2223 | `COM2` | A2 **MCU** 串口 | MCU 控制台，SoC 挂死时通过 MCU 重启 SoC |
+
+**跳板机上启动两个桥接进程**（当前桥接程序为单串口设计，需两个进程）：
+
+> **注意**：COM1/COM2 为示例，实际端口号需在跳板机设备管理器中确认。
 
 ### 跳板机的能力边界
 
 | 操作 | 是否可行 | 说明 |
 |------|----------|------|
-| SCP 上传文件到跳板机 | **可行** | `scp -P 2222 fip.bin admin@172.25.87.179:.` 将文件上传到跳板机本地存储 |
-| SSH exec 触发 uart-upgrade | **可行** | `ssh -p 2222 admin@172.25.87.179 uart-upgrade` 作为 SSH exec 命令，桥接程序拦截执行 |
-| SSH exec 检查依赖 | **可行** | `ssh -p 2222 admin@172.25.87.179 __uart_deps__` |
+| SCP 上传文件到跳板机 | **可行** | `scp -P 2222 fip.bin admin@172.25.84.190:.` 将文件上传到跳板机本地存储 |
+| SSH exec 触发 uart-upgrade | **可行** | `ssh -p 2222 admin@172.25.84.190 uart-upgrade` 作为 SSH exec 命令，桥接程序拦截执行 |
+| SSH exec 检查依赖 | **可行** | `ssh -p 2222 admin@172.25.84.190 __uart_deps__` |
 | SSH 交互式登录后执行跳板机 shell 命令 | **不可行** | SSH 2222 交互式连接直接透传到 A2 串口，输入的任何内容都发送给 A2，而非跳板机 |
 | 在跳板机上 ls/check 文件 | **不可行** | 无法在跳板机上执行 shell 命令，fip.bin 是否存在只能通过 scp 命令返回状态判断 |
 
 > **关键特性**：SSH 2222 交互式连接 = A2 串口控制台，不是跳板机的 shell。所有交互式输入直达 A2 设备。
+
+### MCU 端口 (2223) 通信方式
+
+| 操作 | 是否可行 | 说明 |
+|------|----------|------|
+| SSH exec 发送 MCU 命令 | **可行** | `sshpass -p 123456 ssh -T -o StrictHostKeyChecking=no -p 2223 admin@172.25.84.190 <命令>` |
+| MCP 交互终端连接 MCU | **不可靠** | MCP 终端的 `send_command` 可能无法正确捕获串口透传输出，**不推荐** |
+
+**MCU 命令参考**（MCU 有 `#` prompt，支持以下命令）：
+
+| 命令 | 作用 |
+|------|------|
+| `reboot` | 重启 A2 SoC（断电后再上电） |
+| 其他命令 | 返回 `'xxx' not found` |
+
+> **重要**：Agent 向 MCU 发送命令时，必须使用 **SSH exec 模式**（`sshpass ssh ... command`），不要创建 MCP 交互终端会话。交互终端模式下 MCU 的透传输出可能无法被正确读取。
 
 ---
 
@@ -48,8 +76,8 @@
 |------|----------|------|
 | 编译 fip.bin | **可行** | 在 Docker 容器内执行 `source build/envsetup_soc.sh` → `defconfig edge_wevb_emmc` → `build_fsbl` |
 | 查找/检查 fip.bin | **可行** | `find` 或直接读取 `install/soc_edge_wevb_emmc/fip.bin` |
-| SCP 拷贝 fip.bin 到跳板机 | **可行** | `sshpass -p 123456 scp -P 2222 -o StrictHostKeyChecking=no install/soc_edge_wevb_emmc/fip.bin admin@172.25.87.179:.` |
-| SSH exec 触发 uart-upgrade | **可行** | `sshpass -p 123456 ssh -o StrictHostKeyChecking=no admin@172.25.87.179 -p 2222 uart-upgrade` |
+| SCP 拷贝 fip.bin 到跳板机 | **可行** | `sshpass -p 123456 scp -P 2222 -o StrictHostKeyChecking=no install/soc_edge_wevb_emmc/fip.bin admin@172.25.84.190:.` |
+| SSH exec 触发 uart-upgrade | **可行** | `sshpass -p 123456 ssh -o StrictHostKeyChecking=no admin@172.25.84.190 -p 2222 uart-upgrade` |
 | SSH 交互式连接 A2 串口 | **可行** | 通过 sshpass 连接 SSH 2222，获得 A2 串口控制台 |
 
 ---
@@ -59,7 +87,7 @@
 | 属性 | 说明 |
 |------|------|
 | **前提条件** | A2 必须重启进入 ROM 阶段（bmtest中需要相关的重启命令如reset、reboot等，如果没有只能手动重启） |
-| **触发方式** | 服务器执行 `sshpass -p 123456 ssh -o StrictHostKeyChecking=no admin@172.25.87.179 -p 2222 uart-upgrade` |
+| **触发方式** | 服务器执行 `sshpass -p 123456 ssh -o StrictHostKeyChecking=no admin@172.25.84.190 -p 2222 uart-upgrade` |
 | **校验机制** | A2 在 ROM 阶段接收桥接程序发送的串口校验数据，校验通过后进入烧录流程 |
 | **连接特性** | 扦行 uart-upgrade 后 SSH 会话会**立即断开**，此为正常行为 |
 | **烧录产物** | 跳板机上的 `fip.bin` 文件（由 scp 上传，无法在跳板机上验证是否存在） |
@@ -72,9 +100,9 @@
 |------|----------|------|------|
 | 1. 编译 fip.bin | **服务器** Docker 内 | `source build/envsetup_soc.sh && defconfig edge_wevb_emmc && build_fsbl` | 产物生成在 `install/soc_edge_wevb_emmc/fip.bin` |
 | 2. 确认 fip.bin 存在 | **服务器** | `find install/soc_edge_wevb_emmc/fip.bin` 或直接读取 | 在服务器本地验证，**不要尝试在跳板机上检查** |
-| 3. SCP 上传到跳板机 | **服务器** | `sshpass -p 123456 scp -P 2222 -o StrictHostKeyChecking=no install/soc_edge_wevb_emmc/fip.bin admin@172.25.87.179:.` | 上传到跳板机本地存储，scp 返回状态即传输结果 |
-| 4. A2 重启 | **A2** 串口控制台 | Ubuntu: `sudo shutdown -r +1`；U-Boot: `sleep 15; reset` Bmtest: `reset`| 通过 SSH 2222 交互式连接 A2 执行 |
-| 5. 在步骤4执行完，立马触发 uart-upgrade|无需等待shutdown 延时执行完| **服务器** | `sshpass -p 123456 ssh -o StrictHostKeyChecking=no admin@172.25.87.179 -p 2222 uart-upgrade` | SSH exec 命令，**不是交互式输入** |
+| 3. SCP 上传到跳板机 | **服务器** | `sshpass -p 123456 scp -P 2222 -o StrictHostKeyChecking=no install/soc_edge_wevb_emmc/fip.bin admin@172.25.84.190:.` | 上传到跳板机本地存储，scp 返回状态即传输结果 |
+| 4. A2 重启 | **A2** 串口控制台 | Ubuntu: `sudo shutdown -r +1`；U-Boot: `sleep 15; reset` Bmtest: `reset` 或者通过MCU重启 | 通过 SSH 2222 交互式连接 A2 执行 |
+| 5. 在步骤4执行完，立马触发 uart-upgrade|无需等待shutdown 延时执行完| **服务器** | `sshpass -p 123456 ssh -o StrictHostKeyChecking=no admin@172.25.84.190 -p 2222 uart-upgrade` | SSH exec 命令，**不是交互式输入** |
 | 6. 监控烧录进度 | **A2** 串口控制台 | 等待 `Program fip.bin done` | 通过 SSH 2222 交互式连接 A2 观察输出 |
 
 **注意**： 测试前开发板可能处于linux、uboot、bmtest环境下，但固件烧录后 A2 应当处于bmtest环境。烧录后如果为uboot环境下（sophon#），则烧录失败。
@@ -86,15 +114,15 @@
 ```
 ┌─────────────┐      SSH/SCP      ┌─────────────┐      物理串口      ┌─────────┐
 │   服务器     │ ◄──────────────► │   跳板机     │ ◄────────────────► │    A2   │
-│ (编译/维护)  │   网络隔离        │ (桥接程序)   │    UART 线        │ (BM1688) │
+│ (编译/维护)  │   网络隔离        │ (桥接程序)   │    UART 线 x2     │ (BM1688) │
 │             │                   │             │                   │         │
-│  Docker内    │  scp -P 2222    │  SSH:2222   │  uart-upgrade     │  ROM    │
-│  编译fip.bin ├────────────────► │  转发串口    ├──────────────────►│  校验   │
-│             │                   │  接收串口    │                   │  烧录   │
-│             │                   │  输出        │                   │         │
+│  一个 Agent  │  ssh -p 2222    │  SSH:2222   │  COM1 ──────────► │  SoC    │
+│  两个会话    ├────────────────► │  转发 SoC    │                   │  bmtest │
+│             │                   │             │                   │         │
+│  soc_session│  ssh -p 2223    │  SSH:2223   │  COM2 ──────────► │  MCU    │
+│  mcu_session├────────────────► │  转发 MCU   │                   │  reboot │
 └─────────────┘                   └─────────────┘                   └─────────┘
 
-SSH 2222 交互式连接 = A2 串口控制台（不是跳板机 shell）
-SSH 2222 exec 命令 = 跳板机桥接程序拦截执行（如 uart-upgrade）
-SCP 2222 上传文件 = 跳板机本地存储（fip.bin 等）
+SoC 会话 (2222)：安全测试主通道，逐条发送 bmtest 命令
+MCU 会话 (2223)：备用通道，SoC 挂死时通过 MCU 重启 SoC
 ```

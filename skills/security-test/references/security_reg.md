@@ -22,7 +22,7 @@
 
 1. **Master 读通道（`fabFW_hsperi_m_ar_ns`）**：清除 CA53（**bit1**）的强制 secure 读，写入 `0x7FD`（见 `testcase_security.c`）
 2. **Slave secure 位（`tz_s`）**：将目标外设/区域的对应 bit 置 **1**
-3. **EL3** 写探针或读真值
+3. **EL3** 写入标记值或读真值
 4. **`switch_el1`** 切至非安全 EL1
 5. **EL1** 再次访问：预期被阻断（读值变化、挂死或中断）
 
@@ -379,11 +379,11 @@ RESERVED_ADDR =36'h0_2940_0000
 - **说明**：slave firewall control signal for ROM post-mask regions (forbidden read access),access control by rom_firewall
 24 regions, 8KB per region
 (access re-direct to reserved address 36'h0_2940_0000)
-- **备注**：ROM read lock post-mask
+- **备注**：ROM read lock post-mask。**关键行为**：当非安全访问被 ROM 防火墙阻止时，硬件将读操作重定向到 ROM 首地址 `0x29400000`，该地址第一个 word 值为 `0x14000042`，因此 EL1 读到 `0x14000042` 即表示防火墙正常阻断。
 
 | 字段 | 位 | 复位 | 读写 | 含义 |
 |------|----|------|------|------|
-| `fabFW_ROM_psmsk` | [31:0] | h0 | rw | ROM 读锁定 post-mask |
+| `fabFW_ROM_psmsk` | [31:0] | h0 | rw | ROM 读锁定 post-mask，bit=1 时对应 region 的**所有读访问（含EL3安全读）**被重定向到 `0x29400000`。与 `tz_s` (0x33030058) 不同：tz_s 仅阻断非安全访问(EL1)，EL3仍可读；psmsk 阻断一切 |
 
 ### 3.3 调试与其它
 
@@ -459,8 +459,8 @@ RESERVED_ADDR =36'h0_2940_0000
 ### 4.2 `peri_secure <index>` → `reg_peri_fw_s_tz_s`
 
 - 寄存器：`0x3303003C`
-- 测试地址 = 下表探测地址；写探针值：`0x87654321`（bmtest 预设）
-- 备用偏移：`+0x4`、`+0x8`、`+0x10`（写探针类一般不必换址；读回均为 `0x87654321` 时直接 FAIL）
+- 测试地址 = 下表探测地址；写入标记值：`0x87654321`（bmtest 预设）
+- 备用偏移：`+0x4`、`+0x8`、`+0x10`（写探测类一般不必换址；读回均为 `0x87654321` 时直接 FAIL）
 
 | Index | 名称 | 探测地址 | reg_peri_fw 位 | 备注 |
 |-------|------|----------|----------------|------|
@@ -468,7 +468,7 @@ RESERVED_ADDR =36'h0_2940_0000
 | 1 | PERI_INTC2 | `0x27112000` | bit - |  |
 | 2 | PERI_INTC1 | `0x27111000` | bit - |  |
 | 3 | PERI_INTC0 | `0x27110000` | bit - |  |
-| 4 | PERI_OTP | `0x27100000` | bit - | SKIP |
+| 4 | PERI_OTP | `0x27100000` | bit - | |
 | 5 | PERI_MAILBOX | `0x270F0000` | bit - |  |
 | 6 | PERI_SARADC | `0x270E0000` | bit 28 |  |
 | 7 | PERI_TEMPSEN | `0x270D0000` | bit 27 |  |
@@ -510,7 +510,7 @@ RESERVED_ADDR =36'h0_2940_0000
 | 6 | HSPERI_UART3 | `0x04130000` | bit12 |  |
 | 7 | HSPERI_UART2 | `0x04120000` | bit11 |  |
 | 8 | HSPERI_UART1 | `0x04110000` | bit10 |  |
-| 9 | HSPERI_UART0 | `0x04108000` | bit9 | SKIP |
+| 9 | HSPERI_UART0 | `0x04108000` | bit9 | |
 | 10 | HSPERI_I2S_DW | `0x04100000` | bit8 |  |
 | 11 | HSPERI_I2S_AUDSRC | `0x040C0000` | bit7 |  |
 | 12 | HSPERI_I2S5 | `0x04080000` | bit6 |  |
@@ -605,7 +605,7 @@ RESERVED_ADDR =36'h0_2940_0000
 | `rom_secure_region 12` | 12 | `0x29418000` | `reg_rom_fw_s_tz_s` bit12 |  |
 | `rom_secure_region 13` | 13 | `0x2941A000` | `reg_rom_fw_s_tz_s` bit13 |  |
 | `rom_secure_region 14` | 14 | `0x2941C000` | `reg_rom_fw_s_tz_s` bit14 |  |
-| `rom_secure_region 15` | 15 | `0x2941E000` | `reg_rom_fw_s_tz_s` bit15 | SKIP |
+| `rom_secure_region 15` | 15 | `0x2941E000` | `reg_rom_fw_s_tz_s` bit15 |  |
 | `rom_secure_region 16` | 16 | `0x29420000` | `reg_rom_fw_s_tz_s` bit16 |  |
 | `rom_secure_region 17` | 17 | `0x29422000` | `reg_rom_fw_s_tz_s` bit17 |  |
 | `rom_secure_region 18` | 18 | `0x29424000` | `reg_rom_fw_s_tz_s` bit18 |  |
@@ -631,7 +631,7 @@ RESERVED_ADDR =36'h0_2940_0000
 
 完整流程见 [reference.md](reference.md)「辅助测试流程」。摘要：
 
-**`peri_secure`**：写探针类；EL1 == `0x87654321` → FAIL；否则 PASS。
+**`peri_secure`**：写探测类；EL1 == `0x87654321` → FAIL；否则 PASS。
 
 **`hsperi_secure` / `rom_*` / `dram_secure_region`**：读对比类；EL3 == EL1 时 **勿直接 FAIL**，按下列顺序辅助：
 
