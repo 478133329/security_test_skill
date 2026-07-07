@@ -27,8 +27,7 @@ description: >-
 | [security_reg.md](references/security_reg.md) | 寄存器绝对地址、index→bit 映射 |
 | [security_testcase.md](references/security_testcase.md) | 官方验证表格用例总结 |
 | [test_cases.md](test_cases.md) | 批量测试命令清单 |
-| [report_template.md](templates/report_template.md) | 报告模板 |
-| [reports/test_plan.md](reports/test_plan.md) | **测试计划**（superpowers:writing-plans 生成） |
+| [report_template.md](reports/report_template.md) | 报告模板（测试报告 / 辅助测试报告 / 代码修改记录） |
 | [reports/auxiliary_test_plan.md](reports/auxiliary_test_plan.md) | **辅助验证计划**（EL3==EL1/挂死等存疑用例的逐步骤复验方案） |
 
 ## 测试套件（bmtest）
@@ -43,9 +42,18 @@ description: >-
 | rom_lock | `rom_read_lock <0-23>` | 24 | 读对比 |
 | rom_define | `rom_define_region 0` | 1 | 读对比 |
 
-**为保证测试稳定，必须逐条手动执行，不要用python、shell等脚本批量刷命令**
+**推荐使用 bmtest_automation 脚本自动执行。** 脚本通过 pexpect + sshpass 管理交互式 SSH 会话，自动处理 prompt 等待、挂死检测和 MCU 恢复。
 
-> **严格禁止**：绝对不允许通过 sshpass 管道、bash 循环、expect 脚本、background task 等方式批量发送命令。原因：1）reset 后重启时机不确定，管道无法感知 prompt 是否就绪；2）串口输入首字符会被 "Input any key" 提示吞掉，批量模式下命令会损坏；3）EL 切换后可能挂死，批量模式无法检测并恢复。**每条命令必须等待上一条的 `$` prompt 出现后才能发送下一条。**
+> 运行方式：`python3 -m security-test.bmtest_automation.main` (从 skills 目录)
+>
+> 脚本特性：
+> - 逐条发送命令，等待 `$` prompt 后才发下一条
+> - 15s 超时检测挂死，自动通过 MCU 2223 reboot 恢复
+> - 每条用例后自动 reset + 等待 reboot + EL3 验证
+> - 每 5 条保存一次进度到 `results_progress.json`
+> - 支持断点续跑（通过 `--start-from` 参数）
+>
+> 详见 [bmtest_automation/](bmtest_automation/) 目录下各模块源码
 
 ## Superpowers 技能对接
 
@@ -72,25 +80,6 @@ description: >-
    - 预期挂死或中断的IP：`EL1访问挂死` 或 `INT: recv interrupt`
 3. 确定执行顺序（按 Index 递增）
 4. 预估可能存疑的用例（如已知某些 IP 易挂死或读值特殊）
-
-**计划文档格式**：
-
-```markdown
-# A2 Security 测试计划
-
-- **生成时间**: YYYY-MM-DD HH:MM
-- **固件**: out/athena2_ASIC_security.bin
-- **用例总数**: 129
-
-## 执行顺序
-
-| Index | 命令 | 模块 | 分类 | 预期测试结果 |
-|-------|------|------|------|------------|
-| 0 | `peri_secure 0` | PERI_INTC3 | peri | EL1读值≠0x87654321 |
-| 28 | `hsperi_secure 1 0` | HSPERI_SPI1 | hsperi0 | EL3读值≠EL1读值 |
-| 71 | `dram_secure_region 0` | DDR_SECURE_REGION1 | ddr_firewall | EL1读值≠EL3明文，或INT触发 |
-| ... | ... | ... | ... | ... |
-```
 
 ## Agent 执行步骤
 
@@ -214,7 +203,7 @@ INT: recv interrupt  →  PASS
 
 ### 5. 生成报告（superpowers:verification-before-completion）
 
-报告填入 [report_template.md](templates/report_template.md)。
+报告填入 [report_template.md](reports/report_template.md)。
 
 **报告生成后必须调用 `superpowers:verification-before-completion` 进行以下验证，全部通过才能宣称完成**：
 
@@ -256,44 +245,7 @@ INT: recv interrupt  →  PASS
 | 读值与预期模式不一致 | 如 peri_secure 的 EL1 不是 0x14000042，或 dram 未触发 INT |
 | 任何无法直接判定 PASS/FAIL 的情况 | 需要人工复核的边界情况 |
 
-**`auxiliary_test_plan.md` 文档格式**：
-
-```markdown
-# 辅助验证计划
-
-## 1. <命令> (<模块名>) — <现象摘要>
-
-- **状态**: 待辅助验证
-- **现象**: <具体现象>
-- **对应 tz_s 寄存器**: <地址>
-- **tz_s bit**: <bit位置，从 log 中 sec_fab 值确认>
-
-### 完整原始日志
-    [粘贴完整 log 输出]
-
-### 辅助测试计划
-
-#### 步骤 1: 确认当前防火墙配置
-    [reset → current_el → rm 关键寄存器 → 期望值]
-
-#### 步骤 2: 主地址探测
-    [wm ar_ns → wm tz_s → rm 主地址 → switch_el1 → rm 对比]
-    [判定条件]
-
-#### 步骤 3-N: 备用偏移 (+0x4, +0x8, +0x10)
-    [同上格式，每个偏移一个步骤]
-
-#### 步骤 N+1: 非法访问日志
-    [rm 0x3303004C/50 → 判定]
-
-### 判定汇总
-| 条件 | 结论 |
-|------|------|
-| 任一地址 EL3≠EL1 | PASS |
-| switch_el1 后挂死 | PASS(BLOCKED) |
-| illegal_slave 非零 | PASS |
-| 全部地址 EL3==EL1 且配置正确 | FAIL |
-```
+**`auxiliary_test_plan.md` 文档格式详见** [report_template.md](reports/report_template.md) §2 辅助验证计划模板。
 
 **每条辅助计划必须包含**：
 1. 完整原始 log（从命令开始到挂死/prompt）
